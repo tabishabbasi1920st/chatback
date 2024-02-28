@@ -162,13 +162,19 @@ app.get("/my-chats", async (req, res) => {
 
 const connectedUsers = {};
 
+// user status api.
+app.get("/user-status", (req, res) => {
+  const { user } = req.query;
+  const isOnline = connectedUsers[user] ? true : false;
+  return res.json({ isOnline });
+});
+
 io.on("connection", (socket) => {
   console.log("User connected", socket.id);
 
-  socket.on("setEmail", (email, callback) => {
+  socket.on("setEmail", (email) => {
     // add user to the list of connected users
     connectedUsers[email] = socket.id;
-    callback({ connectedUsers });
     console.log(connectedUsers);
   });
 
@@ -184,6 +190,7 @@ io.on("connection", (socket) => {
       });
 
       const savedMessage = await newChatMessage.save();
+      console.log(savedMessage);
       // Send acknowledgment to the sender
       callback({ success: true, message: "Message sent successfully" });
     } catch (err) {
