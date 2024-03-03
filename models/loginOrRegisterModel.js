@@ -15,6 +15,10 @@ const userSchema = new Schema({
     type: String,
     required: true,
   },
+  imageUrl: {
+    type: String,
+    required: true,
+  },
 });
 
 // Create the model

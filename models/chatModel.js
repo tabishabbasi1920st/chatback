@@ -25,8 +25,12 @@ const chatSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  type: {
+    type: String,
+    required: true,
+  },
 });
 
-const ChatMessage = mongoose.model("chatting", chatSchema);
+const ChatMessage = mongoose.model("chattings", chatSchema);
 
 module.exports = ChatMessage;

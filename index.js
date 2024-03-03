@@ -9,10 +9,21 @@ const mongoose = require("mongoose");
 const LoginOrRegisterModel = require("./models/loginOrRegisterModel");
 const UserModel = require("./models/userModel");
 const ChatMessage = require("./models/chatModel");
+const bodyParser = require("body-parser");
+const fs = require("fs");
 
 const app = express();
+
+// middlewares
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "100mb" }));
+app.use(bodyParser.json({ limit: "100mb" }));
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Serve static files from the 'uploads' directory
+app.use("/uploads", express.static("uploads"));
+app.use("/uploads_audio", express.static("uploads_audio"));
+app.use("/reg_users", express.static("reg_users"));
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -66,6 +77,14 @@ const authenticateToken = (req, res, next) => {
 
 // Register user Api
 app.post("/register", async (req, res) => {
+  const { name, email, password, img } = req.body;
+
+  // Convert base 64 image data to buffer
+  const imageBuffer = Buffer.from(img, "base64");
+
+  // Save the buffer to a file in your desired location
+  fs.writeFileSync(`reg_users/${email}_profile_image.png`, imageBuffer);
+
   try {
     const { name, email, password } = req.body;
     const hashedPassword = await hash(password, 10);
@@ -74,6 +93,7 @@ app.post("/register", async (req, res) => {
       name,
       email,
       password: hashedPassword,
+      imageUrl: `reg_users/${email}_profile_image.png`,
     });
 
     const savedUser = await newUser.save();
@@ -114,9 +134,11 @@ app.post("/login", async (req, res) => {
 });
 
 // all chats api
-app.get("/all-chats", async (req, res) => {
+app.post("/all-chats", async (req, res) => {
+  const { user } = req.body;
+  console.log(user);
   try {
-    const allChats = await UserModel.find();
+    const allChats = await UserModel.find({ email: { $ne: user } });
     res.status(200);
     res.json({ allChats });
   } catch (err) {
@@ -175,24 +197,96 @@ io.on("connection", (socket) => {
   socket.on("setEmail", (email) => {
     // add user to the list of connected users
     connectedUsers[email] = socket.id;
-    console.log(connectedUsers);
+  });
+
+  console.log(connectedUsers);
+
+  socket.on("privateImage", async (msg, callback) => {
+    try {
+      const { id, newMessage, dateTime, sentBy, sentTo, type } = msg;
+      const { uploaded_image } = newMessage;
+
+      // Convert base 64 image data to buffer
+      const imageBuffer = Buffer.from(uploaded_image, "base64");
+
+      // Save the buffer to a file.
+      fs.writeFileSync(`uploads/img_${id}.png`, imageBuffer);
+
+      const newImage = new ChatMessage({
+        id,
+        newMessage: `uploads/img_${id}.png`,
+        dateTime,
+        sentBy,
+        sentTo,
+        type,
+      });
+
+      const savedImage = await newImage.save();
+      callback({ success: true, message: savedImage });
+      if (connectedUsers[sentTo]) {
+        const socketId = connectedUsers[sentTo];
+        io.to(socketId).emit("privateImage", savedImage);
+      } else {
+        console.log("User is offline");
+      }
+    } catch (err) {
+      callback({ success: false, message: null });
+      console.log("Error while storing image in local system.", err);
+    }
+  });
+
+  socket.on("privateAudio", async (msg, callback) => {
+    try {
+      const { id, newMessage, dateTime, sentBy, sentTo, type } = msg;
+      const { uploaded_audio } = newMessage;
+
+      // convert base64 audio data to buffer
+      const audioBuffer = Buffer.from(uploaded_audio, "base64");
+
+      // Save the buffer to a file
+      fs.writeFileSync(`uploads_audio/audio_${id}.wav`, audioBuffer);
+
+      const newAudioMessage = new ChatMessage({
+        id,
+        newMessage: `uploads_audio/audio_${id}.wav`,
+        dateTime,
+        sentBy,
+        sentTo,
+        type,
+      });
+
+      const savedAudioMessage = await newAudioMessage.save();
+      console.log(savedAudioMessage);
+      if (connectedUsers[sentTo]) {
+        const socketId = connectedUsers[sentTo];
+        io.to(socketId).emit("privateAudio", savedAudioMessage);
+      } else {
+        console.log("User is offline");
+      }
+
+      callback({ success: true, message: savedAudioMessage });
+    } catch (err) {
+      callback({ success: false, message: null });
+      console.log("Error while storing audio in the local system.", err);
+    }
   });
 
   socket.on("privateMessage", async (msg, callback) => {
-    const { sentTo, sentBy, newMessage, dateTime } = msg;
+    const { id, sentTo, sentBy, newMessage, dateTime, type } = msg;
     // Insert chatting in chatting list api.
     try {
       const newChatMessage = new ChatMessage({
+        id,
         newMessage,
         dateTime,
         sentBy,
         sentTo,
+        type,
       });
 
       const savedMessage = await newChatMessage.save();
       console.log(savedMessage);
       // Send acknowledgment to the sender
-      callback({ success: true, message: "Message sent successfully" });
     } catch (err) {
       console.error("Error while sending private chat into db", err);
       callback({ success: true, message: "Message not sent." });
@@ -201,8 +295,10 @@ io.on("connection", (socket) => {
     if (connectedUsers[sentTo]) {
       const socketId = connectedUsers[sentTo];
       io.to(socketId).emit("privateMessage", msg);
+      callback({ success: true, message: "Message sent successfully" });
     } else {
       console.log("User is offline");
+      callback({ success: true, message: "Message in not fully delievered" });
     }
   });
 
