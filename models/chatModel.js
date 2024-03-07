@@ -29,6 +29,10 @@ const chatSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  delieveryStatus: {
+    type: String,
+    required: true,
+  },
 });
 
 const ChatMessage = mongoose.model("chattings", chatSchema);

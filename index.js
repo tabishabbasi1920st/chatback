@@ -191,12 +191,23 @@ app.get("/user-status", (req, res) => {
   return res.json({ isOnline });
 });
 
+app.post("/mp3file-upload", (req, res) => {
+  console.log(req.body.audioData);
+});
+
+const messageDelieveryStatusConstants = {
+  sent: "SENT",
+  pending: "PENDING",
+  seen: "SEEN",
+};
+
 io.on("connection", (socket) => {
   console.log("User connected", socket.id);
 
   socket.on("setEmail", (email) => {
     // add user to the list of connected users
     connectedUsers[email] = socket.id;
+    io.emit("connectedUsers", Object.keys(connectedUsers));
   });
 
   console.log(connectedUsers);
@@ -271,8 +282,45 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("gotPrivateMessage", (newMessage) => {
+    const { id, sentBy, sentTo } = newMessage;
+    console.log("Emitting back");
+    io.to(connectedUsers[sentTo]).emit("gotPrivateMessage", { msgId: id });
+  });
+
+  socket.on("updateMyMessageStatus", async (data) => {
+    const { me, to } = data;
+    console.log(me, to);
+
+    const updatedMessages = await ChatMessage.find({
+      sentTo: me,
+      delieveryStatus: {
+        $in: [
+          messageDelieveryStatusConstants.pending,
+          messageDelieveryStatusConstants.sent,
+        ],
+      },
+    });
+
+    await ChatMessage.updateMany(
+      {
+        sentTo: me,
+        delieveryStatus: {
+          $in: [
+            messageDelieveryStatusConstants.pending,
+            messageDelieveryStatusConstants.sent,
+          ],
+        },
+      },
+      { $set: { delieveryStatus: messageDelieveryStatusConstants.seen } }
+    );
+
+    io.to(connectedUsers[to]).emit("iHaveSeenAllMessages", updatedMessages);
+  });
+
   socket.on("privateMessage", async (msg, callback) => {
-    const { id, sentTo, sentBy, newMessage, dateTime, type } = msg;
+    const { id, sentTo, sentBy, newMessage, dateTime, type, delieveryStatus } =
+      msg;
     // Insert chatting in chatting list api.
     try {
       const newChatMessage = new ChatMessage({
@@ -282,23 +330,63 @@ io.on("connection", (socket) => {
         sentBy,
         sentTo,
         type,
+        delieveryStatus,
       });
 
       const savedMessage = await newChatMessage.save();
+      // console.log(savedMessage);
+
       console.log(savedMessage);
-      // Send acknowledgment to the sender
+
+      if (connectedUsers[sentTo]) {
+        const result = await ChatMessage.findOneAndUpdate(
+          { id: newChatMessage.id },
+          { $set: { delieveryStatus: messageDelieveryStatusConstants.sent } },
+          { new: true } // Return the updated document.
+        );
+
+        if (result) {
+          console.log("Updated succesfuly online", result);
+        } else {
+          console.log("NO document found with this id");
+        }
+
+        // await ChatMessage.findByIdAndUpdate(savedMessage._id, {
+        //   delieveryStatus: messageDelieveryStatusConstants.sent,
+        // });
+        const socketId = connectedUsers[sentTo];
+        io.to(socketId).emit("privateMessage", {
+          ...msg,
+          delieveryStatus: messageDelieveryStatusConstants.sent,
+        });
+        callback({
+          success: true,
+          msg: messageDelieveryStatusConstants.sent,
+        });
+      } else {
+        console.log("User is offline");
+        const result = await ChatMessage.findOneAndUpdate(
+          { id: newChatMessage.id },
+          { $set: { delieveryStatus: messageDelieveryStatusConstants.sent } },
+          { new: true } // Return the updated document.
+        );
+
+        if (result) {
+          console.log("Updated succesfuly offline", result);
+        } else {
+          console.log("NO document found with this id");
+        }
+        // await ChatMessage.findByIdAndUpdate(savedMessage._id, {
+        //   delieveryStatus: messageDelieveryStatusConstants.sent,
+        // });
+        callback({
+          success: true,
+          msg: messageDelieveryStatusConstants.sent,
+        });
+      }
     } catch (err) {
       console.error("Error while sending private chat into db", err);
-      callback({ success: true, message: "Message not sent." });
-    }
-
-    if (connectedUsers[sentTo]) {
-      const socketId = connectedUsers[sentTo];
-      io.to(socketId).emit("privateMessage", msg);
-      callback({ success: true, message: "Message sent successfully" });
-    } else {
-      console.log("User is offline");
-      callback({ success: true, message: "Message in not fully delievered" });
+      callback({ success: false, msg: "Message not sent." });
     }
   });
 
@@ -313,6 +401,7 @@ io.on("connection", (socket) => {
     if (disconnectedUser) {
       const [disconnectedEmail] = disconnectedUser;
       delete connectedUsers[disconnectedEmail];
+      io.emit("connectedUsers", Object.keys(connectedUsers));
       console.log(`User ${disconnectedEmail} removed from connected users.`);
     }
   });
